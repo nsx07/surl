@@ -16,15 +16,9 @@ namespace Surl.API.Services.UrlShortener
 
         public async Task<UrlShortenedDto> ShortenUrlAsync(ShortenUrlViewModel request)
         {
-            if (request == null || string.IsNullOrWhiteSpace(request.Url) || Uri.TryCreate(request.Url, UriKind.Absolute, out _))
+            if (request == null || string.IsNullOrWhiteSpace(request.Url) || !Uri.TryCreate(request.Url, UriKind.Absolute, out var uri))
             {
                 throw new ArgumentException("Invalid URL provided.", nameof(request));
-            }
-
-            var httpsFragment = new Regex(@"^https?://", RegexOptions.IgnoreCase);
-            if (!httpsFragment.IsMatch(request.Url))
-            {
-                request.Url = "http://" + request.Url;
             }
 
             var existingUrl = await context.UrlShorten
@@ -39,14 +33,21 @@ namespace Surl.API.Services.UrlShortener
                 };
             }
 
-            using var transaction = await context.Database.BeginTransactionAsync();
-
             string originalUrl = request.Url;
             string shortenedUrl = GenerateShortenedUrl(originalUrl);
             UrlShorten shorten = UrlShorten.CreateOne(originalUrl, shortenedUrl, code: shortenedUrl.Split($"/{ROUTE}/").LastOrDefault()!);
             context.UrlShorten.Add(shorten);
-            await context.SaveChangesAsync();
-            await transaction.CommitAsync();
+
+            if (context.Database.IsRelational())
+            {
+                using var transaction = await context.Database.BeginTransactionAsync();
+                await context.SaveChangesAsync();
+                await transaction.CommitAsync();
+            }
+            else
+            {
+                await context.SaveChangesAsync();
+            }
 
             return new UrlShortenedDto()
             {
