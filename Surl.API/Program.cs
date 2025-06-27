@@ -1,10 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Surl.API.Data;
-using Surl.API.Model;
-using Surl.API.RequestResponse.Dto;
 using Surl.API.RequestResponse.ViewModel;
 using Surl.API.Services.UrlShortener;
-using System.Text.RegularExpressions;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,69 +10,73 @@ builder.Services.AddDbContext<AppDbContext>();
 
 var app = builder.Build();
 
-app.MapPost("/shorten", async (IUrlShortenerService urlShortenerService, AppDbContext context, ShortenUrlViewModel request) =>
+app.MapPost("/shorten", async (IUrlShortenerService urlShortenerService, ShortenUrlViewModel request) =>
 {
-    if (request == null || string.IsNullOrWhiteSpace(request.Url) || Uri.TryCreate(request.Url, UriKind.Absolute, out _))
+    try
     {
-        return Results.BadRequest("Invalid URL provided.");
+        return Results.Ok(await urlShortenerService.ShortenUrlAsync(request));
     }
-
-    var httpsFragment = new Regex(@"^https?://", RegexOptions.IgnoreCase);
-    if (!httpsFragment.IsMatch(request.Url))
+    catch (ArgumentException ex)
     {
-        request.Url = "http://" + request.Url;
+        return Results.BadRequest(ex.Message);
     }
-
-    var existingUrl = await context.UrlShorten
-        .FirstOrDefaultAsync(u => u.OriginalUrl == request.Url);
-
-    if (existingUrl != null)
+    catch (Exception ex)
     {
-        return Results.Ok(new UrlShortenedDto
-        {
-            OriginalUrl = existingUrl.OriginalUrl,
-            Url = urlShortenerService.FormatUrlShortened(existingUrl.Code)
-        });
+        return Results.Problem(ex.Message, statusCode: 500);
     }
-
-    using var transaction = await context.Database.BeginTransactionAsync();
-
-    var result = await urlShortenerService.ShortenUrlAsync(request);
-    UrlShorten shorten = UrlShorten.CreateOne(originalUrl: result.OriginalUrl, shortenedUrl: result.Url, code: result.Code);
-    context.UrlShorten.Add(shorten);
-    await context.SaveChangesAsync();
-    await transaction.CommitAsync();
-
-    return Results.Ok(result);
 });
 
-app.MapDelete("shorten/{urlcode}", async (AppDbContext context, string urlcode) => 
+app.MapDelete("shorten/{urlcode}", async (IUrlShortenerService urlShortenerService, string urlcode) => 
 {
-    if (string.IsNullOrEmpty(urlcode))
+    try
     {
-        return Results.BadRequest("Please inform a URL or code");
+        await urlShortenerService.DeleteShortenUrlAsync(urlcode);
+        return Results.Ok();
     }
-
-    var existent = await context.UrlShorten.Where(x => urlcode.Equals(x.OriginalUrl) || urlcode.Equals(x.Code)).FirstOrDefaultAsync();
-
-    if (existent == null)
+    catch (ArgumentException ex)
     {
-        return Results.NotFound("Url not found!");
+        return Results.BadRequest(ex.Message);
     }
-
-    context.UrlShorten.Remove(existent);
-    await context.SaveChangesAsync();
-    return Results.Ok();
+    catch (Exception ex)
+    {
+        return Results.Problem(ex.Message, statusCode: 500);
+    }
 });
 
-app.MapGet("/r/{code}", async (AppDbContext context, string code) =>
+app.MapGet("/r/{code}", async (IUrlShortenerService urlShortenerService, HttpContext httpContext, string code) =>
 {
-    var url = await context.UrlShorten.FirstOrDefaultAsync(u => u.Code == code);
-    if (url == null)
+    try
     {
-        return Results.NotFound("URL not found.");
+        string? ipAddress = httpContext.Request.Headers.Where(h => h.Key == "X-Forwarded-For").Select(h => h.Value.ToString()).FirstOrDefault() 
+            ?? httpContext.Connection.RemoteIpAddress?.ToString();
+
+        string url = await urlShortenerService.GetLinkAsync(code, httpContext.Request.Headers, ipAddress);
+        return Results.Redirect(url, permanent: true, preserveMethod: false);
+    } catch (ArgumentException exception)
+    {
+        return Results.BadRequest(exception.Message);
+    } catch (KeyNotFoundException exception)
+    {
+        return Results.NotFound(exception.Message);
+    } catch (Exception exception)
+    {
+        return Results.Problem(exception.Message);
     }
-    return Results.Redirect(url.OriginalUrl, permanent: true, preserveMethod: false);
 });
+
+app.MapGet("/shorts", async (AppDbContext context) => Results.Ok((await context.UrlShorten.Include(x => x.UrlShortenAccesses).ToListAsync()).Select(x => new
+{
+    x.Id,
+    x.ShortenedUrl,
+    x.OriginalUrl,
+    x.ClickCount,
+    x.Code,
+    x.LastAccessedAt,
+    Access = x.UrlShortenAccesses.Select(s => new
+    {
+        s.IpAddress,
+        s.HeadersRaw,
+    })
+})));
 
 app.Run();

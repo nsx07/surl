@@ -6,6 +6,7 @@ namespace Surl.API.Services.UrlShortener
     public interface IUrlShortenerService
     {
         Task<UrlShortenedDto> ShortenUrlAsync(ShortenUrlViewModel shortenUrlRequest);
-        string FormatUrlShortened(string code);
+        Task DeleteShortenUrlAsync(string urlCode);
+        Task<string> GetLinkAsync(string code, IHeaderDictionary headers, string? ipAddress);
     }
 }

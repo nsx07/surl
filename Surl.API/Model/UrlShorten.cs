@@ -12,6 +12,9 @@ namespace Surl.API.Model
         public required string ShortenedUrl { get; set; }
         public required string Code { get; set; }
         public DateTime CreatedAt { get; set; }
+        public DateTime? LastAccessedAt { get; set; }
+        public int ClickCount { get; set; }
+        public IList<UrlShortenAccess> UrlShortenAccesses { get; } = [];
 
         public static UrlShorten CreateOne(string originalUrl, string shortenedUrl, string code)
         {
