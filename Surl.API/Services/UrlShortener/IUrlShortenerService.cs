@@ -8,5 +8,6 @@ namespace Surl.API.Services.UrlShortener
         Task<UrlShortenedDto> ShortenUrlAsync(ShortenUrlViewModel shortenUrlRequest);
         Task DeleteShortenUrlAsync(string urlCode);
         Task<string> GetLinkAsync(string code, IHeaderDictionary headers, string? ipAddress);
+        Task ProcessClicksAsync(UrlAccessProcessingMessage message);
     }
 }

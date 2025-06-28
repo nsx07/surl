@@ -5,17 +5,21 @@ Accept: application/json
 
 ###
 
-GET {{Surl.API_HostAddress}}/r/R8BcQ4
+GET {{Surl.API_HostAddress}}/r/C8g7y0
 Accept: application/json
 
 ###
 POST {{Surl.API_HostAddress}}/shorten
 Content-Type: application/json
 {
-  "url": "www.youtube.com"
+  "url": "https://www.google.com"
 }
 
 ###
 
-DELETE {{Surl.API_HostAddress}}/shorten/R8BcQ4
+DELETE {{Surl.API_HostAddress}}/shorten/nqjpiW
+Content-Type: application/json
+###
+
+DELETE {{Surl.API_HostAddress}}/flush
 Content-Type: application/json

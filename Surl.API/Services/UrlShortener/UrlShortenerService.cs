@@ -1,14 +1,20 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
+using RabbitMQ.Client;
+using Surl.API.Broker;
 using Surl.API.Data;
 using Surl.API.Model;
 using Surl.API.RequestResponse.Dto;
 using Surl.API.RequestResponse.ViewModel;
+using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Surl.API.Services.UrlShortener
 {
-    public class UrlShortenerService(IConfiguration config, AppDbContext context) : IUrlShortenerService
+    public class UrlShortenerService(IConfiguration config, AppDbContext context, IMessageProducer messageProducer, IMemoryCache cache) : IUrlShortenerService
     {
         private const string ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         private readonly IConfiguration _configuration = config;
@@ -21,8 +27,8 @@ namespace Surl.API.Services.UrlShortener
                 throw new ArgumentException("Invalid URL provided.", nameof(request));
             }
 
-            var existingUrl = await context.UrlShorten
-                .FirstOrDefaultAsync(u => u.OriginalUrl == request.Url);
+            var existingUrl = await cache.GetOrCreateAsync(request.Url, async (key) => await context.UrlShorten
+                    .FirstOrDefaultAsync(u => u.OriginalUrl == request.Url));
 
             if (existingUrl != null)
             {
@@ -76,7 +82,7 @@ namespace Surl.API.Services.UrlShortener
             context.UrlShorten.Remove(existent);
             await context.SaveChangesAsync();
         }
-
+        
         public async Task<string> GetLinkAsync(string code, IHeaderDictionary headers, string? ipAddress)
         {
             if (string.IsNullOrEmpty(code))
@@ -84,30 +90,56 @@ namespace Surl.API.Services.UrlShortener
                 throw new ArgumentException("Code cannot be null or empty.", nameof(code));
             }
 
-            var url = await context.UrlShorten.FirstOrDefaultAsync(u => u.Code == code);
+            var url = await cache.GetOrCreateAsync(code, async (key) => await context.UrlShorten.FirstOrDefaultAsync(u => u.Code == code));
 
             if (url == null)
             {
                 throw new KeyNotFoundException("URL not found.");
             }
 
+            var message = new UrlAccessProcessingMessage
+            {
+                Code = code,
+                UrlId = url.Id,
+                IpAddress = ipAddress,
+                AccessedAt = DateTime.UtcNow,
+                Headers = JsonSerializer.Serialize(headers)
+            };
+
+            await messageProducer.Produce("url_access_processing", message);
+
+            return url.OriginalUrl;
+        }
+
+        public async Task ProcessClicksAsync(UrlAccessProcessingMessage message)
+        {
+            UrlShorten url = await context.UrlShorten.FirstAsync(u => u.Id == message.UrlId);
+
             var access = new UrlShortenAccess
             {
                 UrlShorten = url,
-                IpAddress = ipAddress,
                 UrlShortenId = url.Id,
-                AccessedAt = DateTime.UtcNow,
-                HeadersRaw = JsonSerializer.Serialize(headers),
+                HeadersRaw = message.Headers,
+                IpAddress = message.IpAddress,
+                AccessedAt = message.AccessedAt,
             };
 
             url.LastAccessedAt = access.AccessedAt;
             url.ClickCount++;
 
             context.Update(url);
-            context.Add(access);
-            await context.SaveChangesAsync();
+            context.UrlShortenAccess.Add(access);
 
-            return url.OriginalUrl;
+            if (context.Database.IsRelational())
+            {
+                using var transaction = await context.Database.BeginTransactionAsync();
+                await context.SaveChangesAsync();
+                await transaction.CommitAsync();
+            }
+            else
+            {
+                await context.SaveChangesAsync();
+            }
         }
 
         private string FormatUrlShortened(string code)
@@ -122,7 +154,12 @@ namespace Surl.API.Services.UrlShortener
 
         private static string GenerateUniqueCode(string url)
         {
-            Random random = new(url.Length);
+            using var crypto = RandomNumberGenerator.Create();
+            var seedBytes = Encoding.UTF8.GetBytes(url);
+            crypto.GetBytes(seedBytes);
+            int seed = BitConverter.ToInt32(seedBytes, 0);
+            var random = new Random(seed);
+
             char[] codeChars = new char[6];
             for (int i = 0; i < codeChars.Length; i++)
             {

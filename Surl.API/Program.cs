@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
+using Surl.API.Broker;
 using Surl.API.Data;
+using Surl.API.HostedService;
 using Surl.API.RequestResponse.ViewModel;
 using Surl.API.Services.UrlShortener;
 
@@ -7,6 +9,9 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTransient<IUrlShortenerService, UrlShortenerService>();
 builder.Services.AddDbContext<AppDbContext>();
+builder.Services.AddTransient<IMessageProducer, MessageProducerRabbitMQ>();
+builder.Services.AddHostedService<ProcessClicksHostedService>();
+builder.Services.AddMemoryCache();
 
 var app = builder.Build();
 
