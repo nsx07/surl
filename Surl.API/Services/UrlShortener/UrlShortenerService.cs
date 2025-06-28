@@ -113,7 +113,17 @@ namespace Surl.API.Services.UrlShortener
 
         public async Task ProcessClicksAsync(UrlAccessProcessingMessage message)
         {
-            UrlShorten url = await context.UrlShorten.FirstAsync(u => u.Id == message.UrlId);
+            if (message == null)
+            {
+                throw new ArgumentNullException(nameof(message), "Message cannot be null.");
+            }
+
+            UrlShorten? url = await context.UrlShorten.FirstOrDefaultAsync(u => u.Id == message.UrlId);
+
+            if (url == null)
+            {
+                throw new KeyNotFoundException("URL not found.");
+            }
 
             var access = new UrlShortenAccess
             {
